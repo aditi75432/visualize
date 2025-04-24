@@ -7,39 +7,16 @@ trajectory of a simulation, and the path of the property to render.
 
 It generates an HTML file that contains code to render the plot
 using Cesium Ion, and the GeoJSON file of data provided to the plot.
-
-An example of its usage is as follows:
-
-```py
-from agent_torch.visualize import GeoPlot
-
-# create a simulation
-# ...
-
-# create a visualizer
-engine = GeoPlot(config, {
-  cesium_token: "...",
-  step_time: 3600,
-  coordinates = "agents/consumers/coordinates",
-  feature = "agents/consumers/money_spent",
-})
-
-# visualize in the runner-loop
-for i in range(0, num_episodes):
-  runner.step(num_steps_per_episode)
-  engine.render(runner.state_trajectory)
-```
 """
 
 import re
 import json
-
 import pandas as pd
 import numpy as np
-
 from string import Template
 from agent_torch.core.helpers import get_by_path
 
+# HTML template with embedded CesiumJS to visualize the GeoJSON data over time
 geoplot_template = """
 <!doctype html>
 <html lang="en">
@@ -212,14 +189,15 @@ geoplot_template = """
 </html>
 """
 
-
+# Utility to fetch nested values from a state dictionary using a path string
 def read_var(state, var):
     return get_by_path(state, re.split("/", var))
 
-
+# Main visualization engine
 class GeoPlot:
     def __init__(self, config, options):
         self.config = config
+        # Extract Cesium token, step time, and feature/coordinate paths from options
         (
             self.cesium_token,
             self.step_time,
@@ -236,17 +214,22 @@ class GeoPlot:
 
     def render(self, state_trajectory):
         coords, values = [], []
+
+        # Use simulation name for filenames
         name = self.config["simulation_metadata"]["name"]
         geodata_path, geoplot_path = f"{name}.geojson", f"{name}.html"
 
+        # Iterate over each episode in the state trajectory
         for i in range(0, len(state_trajectory) - 1):
             final_state = state_trajectory[i][-1]
 
+            # Extract coordinate and feature data from the final state of each episode
             coords = np.array(read_var(final_state, self.entity_position)).tolist()
             values.append(
                 np.array(read_var(final_state, self.entity_property)).flatten().tolist()
             )
 
+        # Generate a list of timestamps for each step in the simulation
         start_time = pd.Timestamp.utcnow()
         timestamps = [
             start_time + pd.Timedelta(seconds=i * self.step_time)
@@ -257,6 +240,8 @@ class GeoPlot:
         ]
 
         geojsons = []
+
+        # Construct GeoJSON data for Cesium to visualize
         for i, coord in enumerate(coords):
             features = []
             for time, value_list in zip(timestamps, values):
@@ -265,19 +250,21 @@ class GeoPlot:
                         "type": "Feature",
                         "geometry": {
                             "type": "Point",
-                            "coordinates": [coord[1], coord[0]],
+                            "coordinates": [coord[1], coord[0]],  # [longitude, latitude]
                         },
                         "properties": {
-                            "value": value_list[i],
-                            "time": time.isoformat(),
+                            "value": value_list[i],  # Data to visualize (e.g. money spent)
+                            "time": time.isoformat(),  # Timestamp for Cesium animation
                         },
                     }
                 )
             geojsons.append({"type": "FeatureCollection", "features": features})
 
+        # Write GeoJSON data to file
         with open(geodata_path, "w", encoding="utf-8") as f:
             json.dump(geojsons, f, ensure_ascii=False, indent=2)
 
+        # Fill HTML template with Cesium token, time range, and GeoJSON data
         tmpl = Template(geoplot_template)
         with open(geoplot_path, "w", encoding="utf-8") as f:
             f.write(
